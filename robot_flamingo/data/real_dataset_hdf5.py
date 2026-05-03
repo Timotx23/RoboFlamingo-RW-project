@@ -407,7 +407,7 @@ class RealDatasetHDF5(Dataset):
             traj_rpy = np.zeros((n_frames, 3))
             for i in range(n_frames):
                 traj_rpy[i] = rotm2euler(self.offset_rotm @ quat2rotm(traj_quat[i]))
-            traj_state = np.zeros((n_frames, 7)).astype(np.float32)
+            traj_state = np.zeros((n_frames, 7)).astype(float32)
             traj_state[:, :3] = traj_xyz
             traj_state[:, 3:6] = traj_rpy
             vive_control = self.hdf5["vive_control"]["vive_control_0"][hdf5_st:hdf5_ed]
@@ -540,12 +540,12 @@ class RealDatasetHDF5(Dataset):
         action_data = padded_actions
 
         # Timestep
-        timestep = np.zeros(self.seq_len, dtype=np.int32) # (len)
+        timestep = np.zeros(self.seq_len, dtype=int32) # (len)
         timestep[:tlen] = np.arange(st, ed)
         timestep_data = torch.from_numpy(timestep).long()
 
         # Attention mask (should be all 1 for full dataset)
-        attention_mask = np.ones(self.seq_len, dtype=np.int32) # (len)
+        attention_mask = np.ones(self.seq_len, dtype=int32) # (len)
         attention_mask[tlen:] = 0.0
         assert np.sum(attention_mask) == self.seq_len
         attention_mask_data = torch.from_numpy(attention_mask).long()

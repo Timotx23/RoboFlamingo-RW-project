@@ -16,10 +16,10 @@ mpt_dict = {
         "openflamingo_checkpoint": "path_to/OpenFlamingo-3B-vitl-mpt1b/checkpoint.pt"
     }, 
     "mpt_dolly_3b": {
-        "lang_encoder_path": "path_to/mpt-1b-redpajama-200b-dolly", 
-        "tokenizer_path": "path_to/mpt-1b-redpajama-200b-dolly", 
+        "lang_encoder_path": "/home/timo/RoboFlamingo/checkpoints/mpt-1b-redpajama-200b-dolly", 
+        "tokenizer_path": "/home/timo/RoboFlamingo/checkpoints/mpt-1b-redpajama-200b-dolly", 
         "cross_attn_every_n_layers": 1,
-        "openflamingo_checkpoint": "path_to/OpenFlamingo-3B-vitl-mpt1b-langinstruct/checkpoint.pt"
+        "openflamingo_checkpoint": "/home/timo/RoboFlamingo/checkpoints/OpenFlamingo-3B-vitl-mpt1b-langinstruct/checkpoint.pt"
     },
     "mpt_4b": {
         "lang_encoder_path": "path_to/RedPajama-INCITE-Instruct-3B-v1", 
@@ -146,9 +146,8 @@ def create_model_and_transforms(
         text_tokenizer.add_special_tokens({"pad_token": "<PAD>"})
     if debug:
         # Load the local checkpoint into a model instance.
-        lang_encoder = AutoModelForCausalLM.from_pretrained(lang_encoder_path, ignore_keys=["config"], trust_remote_code=True)
+        lang_encoder = AutoModelForCausalLM.from_pretrained(lang_encoder_path, trust_remote_code=True)
         # Set the `init_weights` parameter to `False` to prevent the model from loading the pretrained weights.
-        lang_encoder.init_weights(False)
     else:
         print(lang_encoder_path)
         lang_encoder = AutoModelForCausalLM.from_pretrained(

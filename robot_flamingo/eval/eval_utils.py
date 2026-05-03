@@ -73,7 +73,7 @@ class DebugEnv():
         obs['rgb_obs'] = {}
         obs['rgb_obs']['rgb_static'] = np.ones((200, 200, 3), dtype=np.uint8)
         obs['rgb_obs']['rgb_gripper'] = np.ones((84, 84, 3), dtype=np.uint8)
-        obs['robot_obs'] = np.ones(15, dtype=np.float32)
+        obs['robot_obs'] = np.ones(15, dtype=float32)
         return obs
     
     def get_obs(self):
@@ -432,7 +432,7 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
         val_annotations = OmegaConf.load(conf_dir / "annotations/new_playtable_validation.yaml")
 
     eval_log_dir = get_log_dir(eval_log_dir)
-    with open('/mnt/bn/robotics/lxh/robot-flamingo/eval_sequences.json', 'r') as f:
+    with open('/home/timo/RoboFlamingo/eval_sequences.json', 'r') as f:
         eval_sequences = json.load(f)
     device_num = int(torch.distributed.get_world_size())
     device_id = torch.distributed.get_rank()
@@ -684,5 +684,5 @@ def generate_zero_shot_instr():
 def save_sequences():
     random.seed(123)
     eval_sequences = get_sequences(NUM_SEQUENCES)
-    with open('/mnt/bn/robotics/lxh/robot-flamingo/eval_sequences.json', 'w') as f:
+    with open('/home/timo/RoboFlamingo/eval_sequences.json', 'w') as f:
         json.dump(eval_sequences, f)

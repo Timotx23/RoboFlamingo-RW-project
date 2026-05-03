@@ -10,6 +10,10 @@ from torch.distributed.elastic.multiprocessing.errors import record
 # os.environ['PYOPENGL_PLATFORM'] = 'egl'
 os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
 import numpy as np
+np.float = float
+np.int = int
+np.bool = bool
+
 import torch
 import wandb
 from open_flamingo.train.distributed import init_distributed_device, world_info_from_env

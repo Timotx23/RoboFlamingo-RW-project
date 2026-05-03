@@ -38,3 +38,38 @@ lang_simi*
 *plot.py
 void.py
 test*.py
+# Large model/checkpoint files
+*.pth
+*.pt
+*.ckpt
+*.bin
+*.safetensors
+
+# Datasets and generated eval outputs
+dataset/
+datasets/
+calvin/dataset/
+checkpoints/
+evaluate/
+outputs/
+results/
+logs/
+wandb/
+
+# Media / archives
+*.zip
+*.tar
+*.tar.gz
+*.gif
+*.mp4
+*.avi
+
+# Python/cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Environment files
+.env
+.venv/
+venv/

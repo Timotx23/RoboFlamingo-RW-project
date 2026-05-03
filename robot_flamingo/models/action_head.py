@@ -1,5 +1,5 @@
 from typing import Optional, Tuple
-
+from robot_flamingo.models.gentlyness import Gentlyness
 import torch
 import torch.nn as nn
 from open_flamingo.src.helpers import PerceiverResampler
@@ -22,6 +22,9 @@ def lstm_decoder(
 
 class MLPTanhHead(torch.nn.Module):
     def __init__(self, hidden_size, output_size):
+        """
+        This class is outputs a value from -1, 1 and is used specifically for robot actions as these can be broken down into a range of [-1,1]
+        """
         super().__init__()
         self.mlp = torch.nn.Sequential(
             torch.nn.Linear(hidden_size, 1024),
@@ -39,6 +42,9 @@ class MLPTanhHead(torch.nn.Module):
 
 class MLPNohHead(torch.nn.Module):
     def __init__(self, hidden_size, output_size):
+        """ 
+        This class has no activation function meaning any real number is accepted. Perfect for embedded states
+        """
         super().__init__()
         self.mlp = torch.nn.Sequential(
             torch.nn.Linear(hidden_size, 1024),
@@ -55,6 +61,9 @@ class MLPNohHead(torch.nn.Module):
 
 class MLPSigmoidHead(torch.nn.Module):
     def __init__(self, hidden_size, output_size):
+        """
+        This class will output between 0,1 perfect for gripper values which is never negative
+        """
         super().__init__()
         self.mlp = torch.nn.Sequential(
             torch.nn.Linear(hidden_size, 1024),
@@ -72,6 +81,21 @@ class MLPSigmoidHead(torch.nn.Module):
 
 class MLPActionHead(torch.nn.Module):
     def __init__(self, hidden_size):
+        """
+        This class does the following:
+        - Attaches to the hidden states of the RoboFlamingo model
+        -splits robot actions into two parts robot movement and gripper movement
+        num_head outputs 6 vectors which correspond to robot movement:
+        x movement
+        y movement
+        z movement
+        roll rotation
+        pitch rotation
+        yaw rotation 
+        bin_head controlls the cripper in that it outputs 1 value which is either open or closed
+        
+        
+        """
         super().__init__()
         self.hidden_size = hidden_size
         # Create a linear layer for each action
@@ -103,6 +127,9 @@ class MLPActionHead(torch.nn.Module):
 
 
 class ActionDecoder(nn.Module):
+    """
+    This is just an interface of the different things the model needs to do like act, loss, loss_and_act and the forward pass
+    """
     def act(
         self,
         latent_plan: torch.Tensor,
@@ -148,7 +175,13 @@ class ActionDecoder(nn.Module):
 
 
 class FCDecoder(ActionDecoder):
+    """
+    This class is the Fully connected decoder it takes the input from the VLM (openFlamingo) and turns its output into usefull information for the robot 
+    Not used by the model
+     
+    """
     def __init__(
+        
         self,
         in_features: int,
         window_size: int,
@@ -163,22 +196,27 @@ class FCDecoder(ActionDecoder):
         use_state=False,
         return_feature=False,
         multi_step_action=1
+        
     ):
+        print("Using FC decoder")
         super(FCDecoder, self).__init__()
         self.return_feature = return_feature
+        
         if use_state:
+            #Uses current robot state information
             state_in_dim = 7
             state_out_dim = 128
             self.fc_state = MLPNohHead(state_in_dim, state_out_dim)
             in_features += state_out_dim
         
         if fusion_mode == 'two_way':
-            in_features *= 2
+            in_features *= 2 #doubles the amount of features
         
         self.return_feature = return_feature
         self.in_features = in_features
         self.out_features = out_features
-        self.window_size = window_size
+        #this uses previous model actions -> model is history aware
+        self.window_size = window_size # -> this refers to the x amount of recent frames 
         self.multi_step_action = multi_step_action
         if history_len is None:
             history_len = window_size
@@ -192,9 +230,9 @@ class FCDecoder(ActionDecoder):
             torch.nn.ReLU(),
             torch.nn.Linear(in_features//2, hidden_size),
         )
-        if not use_diff:
-            self.actions = MLPTanhHead(hidden_size, out_features)
-            self.gripper = MLPSigmoidHead(hidden_size, 1)
+        if not use_diff: #if use_diff is false the system directly outputs two final heads ie 2 actions one for gripper the other for the robot arm.
+            self.actions = MLPTanhHead(hidden_size, out_features) # predicts 6 continous actions
+            self.gripper = MLPSigmoidHead(hidden_size, 1) #predicts 1 action for the gripper
         self.hidden_state = None
         self.hidden_size = hidden_size * history_len
         
@@ -204,6 +242,7 @@ class FCDecoder(ActionDecoder):
             self.last_action = True
         # self.global_1d_pool = nn.AdaptiveAvgPool1d(1)
         self.global_1d_pool = nn.AdaptiveMaxPool1d(1)
+        #essentially all this work is done to turn a sequence of outputs from the vlm into a feature rich single vector summary
 
     def forward(  # type: ignore
             self,
@@ -214,37 +253,58 @@ class FCDecoder(ActionDecoder):
         if self.return_feature:
             org_feat = copy.deepcopy(input_feature) 
             org_feat = org_feat.view(self.window_size, *org_feat.shape[1:])
+            #This is relavent if we want to inspect the hidden features
         # reshape
-        input_feature = self.mlp(input_feature)
-        input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1)
-        if self.use_diff:
+        input_feature = self.mlp(input_feature) #Converts raw input features into the a hidden feature for action prediction
+        input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1) #compress the tokens into one feature vector
+        if self.use_diff: #unlike before when use_diff was false it will return features not actions 
+            #Things like:
+            #what objects are visible
+            #where objects may be
+            #what the instruction says
+            #which visual tokens are relevant
+            #what the model thinks the next action should depend on
+            #temporal context from recent frames
+            
             input_feature = input_feature.reshape(-1, self.window_size * input_feature.shape[1])
             return input_feature
 
-        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1])
+        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) #action head looks over a sequence of of frames not individual ones
+        #add robot state if available
         if state_tensor is not None:
             state_tensor = self.fc_state(state_tensor)
             state_tensor = state_tensor.reshape(-1, self.window_size, state_tensor.shape[-1])
             input_feature = torch.cat([input_feature, state_tensor], dim=-1)
 
-        actions = self.actions(input_feature)
-        gripper = self.gripper(input_feature)
+        actions = self.actions(input_feature) #These are the actions of the robot
+        gripper = self.gripper(input_feature) #actions of the gripper
 
-        if self.return_feature:
+        if self.return_feature: # If there is a original feature it will return this as well 
             return actions, gripper, org_feat
         else:
             return actions, gripper
 
 
 class DeterministicDecoder(ActionDecoder):
+    """
+This is the decoder used by this checkpoint.
+
+It takes hidden visual-language features from RoboFlamingo/OpenFlamingo,
+optionally adds robot state information, processes the sequence with an LSTM,
+and predicts:
+- continuous robot arm actions
+- gripper open/close action
+
+Feature sequence → LSTM/RNN → action + gripper
+"""
     def __init__(
         self,
         in_features: int,
         window_size: int,
         history_len = None,
         out_features: int = 6,
-        hidden_size: int = 1024,
-        num_layers: int = 4,
+        hidden_size: int = 1024, #hidden lstm layers
+        num_layers: int = 4, #lstm layers
         policy_rnn_dropout_p: float = 0.1,
         use_diff=False,
         last_action=False,
@@ -254,10 +314,12 @@ class DeterministicDecoder(ActionDecoder):
         return_feature=False,
         pooling='max'
     ):
+        print("using Deterministic decoder")
         super(DeterministicDecoder, self).__init__()
         self.fc_state = None
         self.use_state = use_state
         if use_state:
+            #this aims to give the decoder information about the robots physical state
             print('Using state in decoder')
             state_in_dim = 7
             # state_out_dim = 256
@@ -268,36 +330,44 @@ class DeterministicDecoder(ActionDecoder):
 
             self.embed_arm_state = nn.Sequential(torch.nn.Linear(state_in_dim-1, in_features), nn.ReLU())
             self.embed_gripper_state = nn.Sequential(torch.nn.Embedding(2, in_features), nn.ReLU()) # one-hot gripper state
-            self.embed_state = torch.nn.Linear(2*in_features, in_features)
+            self.embed_state = torch.nn.Linear(2*in_features, in_features) #This gives the current state representation of the robot arm: Essentially just states: This is what the arm currently is looking like
         
         if fusion_mode == 'two_way':
-            in_features *= 2
-        self.return_feature = return_feature
+            in_features *= 2 #used for the camera on gripper and the 3rd person camera
+        self.return_feature = return_feature #This then gets pooled so it can see both at the same time
         self.in_features = in_features
         self.out_features = out_features
         self.window_size = window_size
         self.multi_step_action = multi_step_action
+        
+        #this is setting up memory
         if history_len is None:
             history_len = window_size
         self.history_len = history_len
         self.history_memory = []
         self.rnn = lstm_decoder
-        self.rnn = self.rnn(in_features, hidden_size, num_layers, policy_rnn_dropout_p)
+        self.rnn = self.rnn(in_features, hidden_size, num_layers, policy_rnn_dropout_p) #sets up the LSTM decoder
         self.use_diff = use_diff
         self.fusion_mode = fusion_mode
-        if not use_diff:
+        
+        if not use_diff: #Again if the use_diff == False it creates 2 final predictions for the robot and gripper
             self.actions = MLPTanhHead(hidden_size, out_features*multi_step_action)
             self.gripper = MLPSigmoidHead(hidden_size, 1*multi_step_action)
         self.hidden_state = None
         self.hidden_size = hidden_size
+       
         self.rnn_out = None
+        #starting gentlyness values
+        self.gentlyness = Gentlyness(log_activations=True)
         self.last_action = last_action
-        if self.use_diff:
+        
+        
+        if self.use_diff: #again it will return a feature representation instead of direct final predictions
             self.last_action = True
         if pooling == 'max':
-            self.global_1d_pool = nn.AdaptiveMaxPool1d(1)
+            self.global_1d_pool = nn.AdaptiveMaxPool1d(1) #uses the most acitvated token signals
         else:
-            self.global_1d_pool = nn.AdaptiveAvgPool1d(1)
+            self.global_1d_pool = nn.AdaptiveAvgPool1d(1) # uses a blend of all tokens
         
         if self.fusion_mode == 'two_way':
             if pooling == 'max':
@@ -307,54 +377,61 @@ class DeterministicDecoder(ActionDecoder):
 
     def clear_hidden_state(self) -> None:
         self.hidden_state = None
+        self.history_memory = []
+
+        if hasattr(self, "gentlyness"):
+            self.gentlyness.reset(clear_logs=False)
 
     def forward(  # type: ignore
         self,
         input_feature: torch.Tensor,
-        h_0: Optional[torch.Tensor] = None,
-        state_tensor=None,
+        h_0: Optional[torch.Tensor] = None, #this is the initial lstm state
+        state_tensor=None, # robot state
         return_feature=False
     ):
         
         
         # reshape
         if input_feature.dim() == 3:
-            if self.fusion_mode == 'two_way':
+            if self.fusion_mode == 'two_way': #if there are 2 cameras used
                 input_feature = input_feature.reshape(-1, self.window_size, *input_feature.shape[1:])
-                
+                # This essentially looks at the camera feed from both the Main rgb camera and the gripper camera
                 bs = int(input_feature.shape[0] // 2)
                 
                 rgb_feat = input_feature[:bs].view(bs*self.window_size, *input_feature.shape[2:])
-                rgb_feat = self.global_1d_pool(rgb_feat.permute(0, 2, 1)).squeeze(-1)
+                rgb_feat = self.global_1d_pool(rgb_feat.permute(0, 2, 1)).squeeze(-1) #pools only the robot/ main camera
                 
                 gripper_feat = input_feature[bs:].view(bs*self.window_size, *input_feature.shape[2:])
-                gripper_feat = self.global_1d_pool(gripper_feat.permute(0, 2, 1)).squeeze(-1)
+                gripper_feat = self.global_1d_pool(gripper_feat.permute(0, 2, 1)).squeeze(-1) # pools only the gripper camera
                 
                 input_feature = torch.cat([rgb_feat, gripper_feat], dim=-1)
-            else:
+            else: #if there is only one camera available
                 input_feature = self.global_1d_pool(input_feature.permute(0, 2, 1)).squeeze(-1)
-        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1])
-        if self.return_feature:
+                
+        input_feature = input_feature.reshape(-1, self.window_size, input_feature.shape[1]) #groups the input features into a feature sequence ready for lstm
+        
+        if self.return_feature: #saves a original copy of the original features
             org_feat = copy.deepcopy(input_feature) 
             org_feat = org_feat.view(self.window_size, org_feat.shape[-1])
 
-        if state_tensor is not None and self.use_state:
+        if state_tensor is not None and self.use_state: #this is used for the robot states if it is available 
             arm_state = state_tensor[..., :6] # b,len,state_dim-1
-            arm_state_embeddings = self.embed_arm_state(arm_state)
+            arm_state_embeddings = self.embed_arm_state(arm_state) #takes first 6 state values and embedds them 7th dimension prob belongs to gripper therfore it must be excluded
             arm_state_embeddings = arm_state_embeddings.view(-1, self.window_size, arm_state_embeddings.shape[-1]) # b,len,h
-            gripper_state = ((state_tensor[..., -1]+1.0) / 2).long() # b,len,1
+            gripper_state = ((state_tensor[..., -1]+1.0) / 2).long() # b,len,1 converts gripper values to range from 0,1 
             gripper_state_embeddings = self.embed_gripper_state(gripper_state)
             gripper_state_embeddings = gripper_state_embeddings.view(-1, self.window_size, gripper_state_embeddings.shape[-1]) # b,len,h
             state_embeddings = torch.cat((arm_state_embeddings, gripper_state_embeddings), dim=2) # b,len,2h
             state_embeddings = self.embed_state(state_embeddings) # b,len,h
 
             # input_feature = torch.cat([input_feature, state_embeddings], dim=-1)
-            input_feature = input_feature + state_embeddings
-        
+            input_feature = input_feature + state_embeddings #this is a representation of the physical situation of the robot itself
+        #Lstm History stuff
         if not isinstance(self.rnn, nn.Sequential) and isinstance(self.rnn, nn.RNNBase):
             # print('history len:',self.history_len)
             if input_feature.shape[1] == 1:
                 self.history_memory.append(input_feature)
+                #does this only if history isnt full yet
                 if len(self.history_memory) <= self.history_len:
                     # print('cur hist_mem len: {}'.format(len(self.history_memory)))
                     x, h_n = self.rnn(input_feature, self.hidden_state)
@@ -362,7 +439,8 @@ class DeterministicDecoder(ActionDecoder):
                     x = x[:, -1].unsqueeze(1)
                     self.rnn_out = x.squeeze(1)
                 else:
-                    # the hidden state need to be refreshed based on the history window
+                    # the hidden state need to be refreshed based on the history window 
+                    #Only done if history gets too long
                     # print('hist_mem exceeded, refresh hidden state')
                     cur_len = len(self.history_memory)
                     for _ in range(cur_len - self.history_len):
@@ -374,28 +452,39 @@ class DeterministicDecoder(ActionDecoder):
                     x = x[:, -1].unsqueeze(1)
                     self.rnn_out = x.squeeze(1)
             else:
+                #this is done if there are multiple time steps at once -> it then passes this whole sequence into lstm
                 # print('input feature lenght > 1', input_feature.shape)
                 self.hidden_state = h_0
                 x, h_n = self.rnn(input_feature, self.hidden_state)
                 self.hidden_state = h_n
-                if self.last_action:
+                if self.last_action: #this makes it sothat it takes the whole sequence as context but only predicts the action for the last frame
                     x = x[:, -1].unsqueeze(1)
                 self.rnn_out = x.squeeze(1)
         else:
             raise NotImplementedError
-        if self.use_diff:
-            return self.rnn_out
-        actions = self.actions(x)
+        if self.use_diff: 
+            return self.rnn_out #returns the output features of the lstm -> these are not robot actions but hidden representations
+            #Contains things like:
+            #current visual scene
+            #language instruction
+            #recent movement context
+            #robot state, if enabled
+            #history summarized by LSTM
+        actions = self.actions(x) #final predictions based on history
         gripper = self.gripper(x)
+        self.gentlyness.forward(actions, self.rnn_out) #This is our gentlyness stuff and the only thing i added/ changed in the policy head
+        
         if self.return_feature:
             return actions, gripper, org_feat
         else:
             return actions, gripper
 
     def act(
+        
         self,
         input_feature: torch.Tensor,
     ) -> torch.Tensor:
+        """Can be ignored as it isnt used"""
         pred_actions, self.hidden_state = self(
             input_feature, self.hidden_state
         )
@@ -404,6 +493,7 @@ class DeterministicDecoder(ActionDecoder):
 
 
 class GPTDecoder(ActionDecoder):
+    #Not used so no need to annotate
     def __init__(
         self,
         in_features: int,
@@ -421,7 +511,8 @@ class GPTDecoder(ActionDecoder):
         return_feature=False,
         pooling='max',
         **kwargs
-    ):
+    ):  
+        print("Using GPT decoder")
         super(GPTDecoder, self).__init__()
         
         if use_state:
@@ -511,6 +602,7 @@ class GPTDecoder(ActionDecoder):
         return 'gpt_{}_'.format(self.hidden_size, )
 
 class GPTDecoderActPad(ActionDecoder):
+    #Doesnt use this one either so no need to annotate
     def __init__(
         self,
         in_features: int,
