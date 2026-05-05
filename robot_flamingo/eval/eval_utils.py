@@ -24,6 +24,7 @@ from calvin_agent.evaluation.utils import (
     join_vis_lang,
     print_and_save,
 )
+from episode_gif_pipeline import merge_sequence
 from calvin_agent.utils.utils import get_all_checkpoints, get_checkpoints_for_epochs, get_last_checkpoint
 import hydra
 import numpy as np
@@ -396,6 +397,7 @@ def evaluate_policy(model, env, epoch, calvin_conf_path, eval_log_dir=None, debu
             eval_sequences.set_description(
                 " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(count_success(results))]) + "|"
             )
+        
 
     if create_plan_tsne:
         create_tsne(plans, eval_log_dir, epoch)
@@ -490,22 +492,55 @@ def evaluate_sequence(env, model, task_checker, initial_state, eval_sequence, va
     env.reset(robot_obs=robot_obs, scene_obs=scene_obs)
 
     success_counter = 0
+
     if debug:
         time.sleep(1)
         print()
         print()
         print(f"Evaluating sequence: {' -> '.join(eval_sequence)}")
         print("Subtask: ", end="")
+
     for subtask_i, subtask in enumerate(eval_sequence):
         if reset:
-            success = rollout(env, model, task_checker, subtask, val_annotations, plans, debug, eval_log_dir, subtask_i, sequence_i, robot_obs=robot_obs, scene_obs=scene_obs, diverse_inst=diverse_inst)
+            success = rollout(
+                env, model, task_checker, subtask, val_annotations, plans, debug,
+                eval_log_dir, subtask_i, sequence_i,
+                robot_obs=robot_obs, scene_obs=scene_obs,
+                diverse_inst=diverse_inst
+            )
         else:
-            success = rollout(env, model, task_checker, subtask, val_annotations, plans, debug, eval_log_dir, subtask_i, sequence_i,diverse_inst=diverse_inst)
+            success = rollout(
+                env, model, task_checker, subtask, val_annotations, plans, debug,
+                eval_log_dir, subtask_i, sequence_i,
+                diverse_inst=diverse_inst
+            )
+
         if success:
             success_counter += 1
         else:
+            if debug and eval_log_dir and sequence_i != -1:
+                merge_sequence(
+                eval_log_dir,
+                sequence_i,
+                move_subtasks_into_folder=True,
+                delete_subtask_gifs_after_merge=True,
+                evaluate_with_gemini=True,
+                gemini_eval_script="/home/timo/RoboFlamingo/robot_flamingo/eval/gemini_eval.py",
+            )
             return success_counter
+
+    if debug and eval_log_dir and sequence_i != -1:
+        merge_sequence(
+            eval_log_dir,
+            sequence_i,
+            move_subtasks_into_folder=True,
+            delete_subtask_gifs_after_merge=True,
+            evaluate_with_gemini=True,
+            gemini_eval_script="gemini_eval.py",
+        )
+
     return success_counter
+
 
 
 def rollout(env, model, task_oracle, subtask, val_annotations, plans, debug, eval_log_dir='', subtask_i=-1, sequence_i=-1, robot_obs=None, scene_obs=None, diverse_inst=False):
@@ -679,6 +714,18 @@ def generate_zero_shot_instr():
         all_res.append(res)
     with open('/mnt/bn/robotics/lxh/robot-flamingo/lang_annotation_cache.json', 'w') as f:
         json.dump(all_res, f, indent=1)
+                # Save gentleness / activation logs
+        if eval_log_dir is not None:
+            base_model = model.module if hasattr(model, "module") else model
+
+            for name, module in base_model.named_modules():
+                if type(module).__name__ == "DeterministicDecoder":
+                    if hasattr(module, "gentlyness"):
+                        save_path = os.path.join(eval_log_dir, "gentlyness_logs.pt")
+                        module.gentlyness.save(save_path)
+                        print("Saved gentlyness logs to:", save_path)
+                    else:
+                        print("Found DeterministicDecoder but no gentlyness logger:", name)
 
 
 def save_sequences():

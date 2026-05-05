@@ -14,5 +14,25 @@
       "lift_red_block_table",
       "stack_block"
     ]
+  ],
+  [
+    {
+      "led": 1,
+      "lightbulb": 1,
+      "slider": "left",
+      "drawer": "open",
+      "red_block": "table",
+      "blue_block": "table",
+      "pink_block": "slider_right",
+      "grasped": 0
+    },
+    [
+      "lift_red_block_table",
+      "stack_block",
+      "move_slider_right",
+      "lift_blue_block_table",
+      "stack_block",
+      "move_slider_left"
+    ]
   ]
 ]

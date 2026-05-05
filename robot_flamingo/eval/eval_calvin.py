@@ -446,17 +446,30 @@ def main():
     if args.visualize:
         eval_log_dir = 'evaluate/{}'.format(args.evaluate_from_checkpoint.split('.')[0])
     eval_one_epoch_calvin_ddp(
-        args=args,
-        model=ddp_model,
-        image_processor=image_processor,
-        tokenizer=tokenizer,
-        dataset_path=args.calvin_dataset,
-        future_act_len=args.future_act_len,
-        eval_log_dir=eval_log_dir,
-        debug=args.visualize,
-        reset=args.reset,
-        diverse_inst=args.diverse_inst
-    )
+    args=args,
+    model=ddp_model,
+    image_processor=image_processor,
+    tokenizer=tokenizer,
+    dataset_path=args.calvin_dataset,
+    future_act_len=args.future_act_len,
+    eval_log_dir=eval_log_dir,
+    debug=args.visualize,
+    reset=args.reset,
+    diverse_inst=args.diverse_inst
+)
+   
+    # Save gentleness / activation logs after evaluation
+    if args.rank == 0:
+        save_dir = eval_log_dir if eval_log_dir is not None else "evaluate"
+        os.makedirs(save_dir, exist_ok=True)
+
+        for name, module in ddp_model.module.named_modules():
+            if type(module).__name__ == "DeterministicDecoder":
+                if hasattr(module, "gentlyness"):
+                    module.gentlyness.save(
+                        os.path.join(save_dir, "gentlyness_logs.pt")
+                    )
+                    print("Saved gentlyness logs from:", name)
 
 
 if __name__ == "__main__":
